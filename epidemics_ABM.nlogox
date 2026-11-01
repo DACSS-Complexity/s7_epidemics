@@ -1073,25 +1073,4 @@ end]]></code>
     </shape>
   </linkShapes>
   <previewCommands>setup repeat 75 [ go ]</previewCommands>
-  <experiments>
-    <experiment name="flatten the curve" repetitions="100" sequentialRunOrder="true" runMetricsEveryStep="false">
-      <setup>setup</setup>
-      <go>go</go>
-      <exitCondition>not any? turtles with [sir-state = "I"]</exitCondition>
-      <metrics>
-        <metric>peak-infectious-count</metric>
-        <metric>peak-infectious-week</metric>
-      </metrics>
-      <constants>
-        <enumeratedValueSet variable="avoid_transmission?">
-          <value value="false"></value>
-          <value value="true"></value>
-        </enumeratedValueSet>
-        <enumeratedValueSet variable="social-distance?">
-          <value value="false"></value>
-          <value value="true"></value>
-        </enumeratedValueSet>
-      </constants>
-    </experiment>
-  </experiments>
 </model>
