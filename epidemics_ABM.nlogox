@@ -1,216 +1,166 @@
 <?xml version="1.0" encoding="utf-8"?>
 <model version="NetLogo 7.0.3" snapToGrid="true">
-  <code><![CDATA[extensions [csv]
-
-globals [
-  beta-estimate
-;   gamma-estimate
-  r0-estimate
-  population-size
-  initial-infectious
-  transmission-per-contact
-  weekly-recovery-probability
-
+  <code><![CDATA[globals [
   new-infections-this-week
-  new-recoveries-this-week
-  infectious-at-start-count
-  susceptible-contact-attempts
-
-  total-infections
-  total-recoveries
-  total-infectious-weeks
-  total-susceptible-contact-attempts
-
-  infectious-history
-
-  save-csv?
-  results-file-open?
+  peak-infectious-count
+  peak-infectious-week
 ]
 
 turtles-own [
   sir-state
+  wears_mask
+  stay-where-you-are
 ]
 
+
 to setup
-  file-close-all
   clear-all
-
-  ;; Fitted values from the Python notebook.
-  set beta-estimate 0.396
-;   set gamma-estimate 0.113
-  set r0-estimate beta-estimate / gamma-estimate
-
-  set population-size 10000
-  set initial-infectious 175
-
-  ;; Keep per-contact transmission at the 10-contact baseline.
-  set transmission-per-contact beta-estimate / contacts-per-infectious-per-week
-
-  ;; Convert the fitted weekly recovery rate to a weekly probability.
-  set weekly-recovery-probability
-    1 - exp (0 - gamma-estimate)
-
   set new-infections-this-week 0
-  set new-recoveries-this-week 0
-  set infectious-at-start-count 0
-  set susceptible-contact-attempts 0
-
-  set total-infections 0
-  set total-recoveries 0
-  set total-infectious-weeks 0
-  set total-susceptible-contact-attempts 0
-
-  ;; Keep the infectious count from every week for the peak reporter.
-  set infectious-history (list initial-infectious)
-
-  ;; Leave CSV output off during BehaviorSpace runs.
-  set save-csv? false
-  set results-file-open? false
+  set peak-infectious-count initial-infectious
+  set peak-infectious-week 0
 
   create-turtles population-size [
-    setxy random-xcor random-ycor
-    set sir-state "S"
-    set shape "person"
-    set size 0.5
-    set color blue
+    setup-basic-states
+    update-look
+  ]
+
+  ;; Assign each policy group once. The groups can overlap.
+  ask n-of (round (0.10 * population-size)) turtles [
+    set wears_mask true
+  ]
+
+  ask n-of (round (0.10 * population-size)) turtles [
+    set stay-where-you-are true
   ]
 
   ask n-of initial-infectious turtles [
     set sir-state "I"
-    set color orange
-  ]
-
-  if save-csv? [
-    if file-exists? "sir_abm_weekly.csv" [
-      file-delete "sir_abm_weekly.csv"
-    ]
-
-    file-open "sir_abm_weekly.csv"
-    set results-file-open? true
-
-    file-print csv:to-row
-      ["week" "susceptible" "infectious" "recovered"
-       "new_infections" "new_recoveries"
-       "infectious_at_start" "susceptible_contact_attempts"]
+    update-look
   ]
 
   reset-ticks
-
-  if save-csv? [
-    record-week
-  ]
-
   update-sir-plot
 end
+
+
+to setup-basic-states
+  setxy random-xcor random-ycor
+  set shape "person"
+  set size 0.5
+  set sir-state "S"
+  set wears_mask false
+  set stay-where-you-are false
+end
+
 
 to go
-  if not any? turtles with [sir-state = "I"] [
-    close-results-file
-    stop
-  ]
+  if not any? turtles with [sir-state = "I"] [ stop ]
+
+  ;; Save the groups that begin the week infectious or susceptible.
+  let infectious-at-start turtles with [sir-state = "I"]
+  let susceptible-at-start turtles with [sir-state = "S"]
 
   set new-infections-this-week 0
-  set new-recoveries-this-week 0
-  set susceptible-contact-attempts 0
 
-  ;; Newly infected turtles do not transmit until next week.
-  let infectious-at-start turtles with [sir-state = "I"]
-  set infectious-at-start-count count infectious-at-start
-
-  ;; Infectious turtles make random contact attempts.
-  ask infectious-at-start [
-    repeat contacts-per-infectious-per-week [
-      let target one-of other turtles
-
-      if target != nobody [
-        if [sir-state] of target = "S" [
-          set susceptible-contact-attempts
-            susceptible-contact-attempts + 1
-
-          if random-float 1 < transmission-per-contact [
-            ask target [
-              set sir-state "I"
-              set color orange
-            ]
-
-            set new-infections-this-week
-              new-infections-this-week + 1
-          ]
-        ]
-      ]
-    ]
+  ;; Move agents, then expose those who were susceptible at the start.
+  ask turtles [ move-agent ]
+  ask susceptible-at-start [
+    check-exposure infectious-at-start
   ]
 
-  ;; Infectious turtles may recover at the end of the week.
+  ;; Only agents infectious at the start of the week can recover.
   ask infectious-at-start [
-    if random-float 1 < weekly-recovery-probability [
-      set sir-state "R"
-      set color gray
-
-      set new-recoveries-this-week
-        new-recoveries-this-week + 1
-    ]
+    recover-if-needed
   ]
-
-  set total-infections
-    total-infections + new-infections-this-week
-
-  set total-recoveries
-    total-recoveries + new-recoveries-this-week
-
-  set total-infectious-weeks
-    total-infectious-weeks + infectious-at-start-count
-
-  set total-susceptible-contact-attempts
-    total-susceptible-contact-attempts + susceptible-contact-attempts
 
   tick
-
-  ;; Save this week's infectious count for the peak reporter.
-  set infectious-history lput
-    (count turtles with [sir-state = "I"])
-    infectious-history
-
-  if save-csv? [
-    record-week
-  ]
-
+  record-infectious-peak
   update-sir-plot
 end
 
-to record-week
-  if results-file-open? [
-    let susceptible-count count turtles with [sir-state = "S"]
-    let infectious-count count turtles with [sir-state = "I"]
-    let recovered-count count turtles with [sir-state = "R"]
 
-    file-print csv:to-row
-      (list ticks
-        susceptible-count
-        infectious-count
-        recovered-count
-        new-infections-this-week
-        new-recoveries-this-week
-        infectious-at-start-count
-        susceptible-contact-attempts)
+to record-infectious-peak
+  let infectious-now count turtles with [sir-state = "I"]
+
+  if infectious-now > peak-infectious-count [
+    set peak-infectious-count infectious-now
+    set peak-infectious-week ticks
   ]
 end
 
-to close-results-file
-  if results-file-open? [
-    file-close
-    set results-file-open? false
-    print "Saved sir_abm_weekly.csv"
+
+
+to move-agent
+  if not (social-distance? and stay-where-you-are) [
+    rt random-float 360
+    fd 1
   ]
 end
 
-to-report peak-infectious
-  report max infectious-history
+
+to check-exposure [infectious-at-start]
+  let nearby-people other turtles-here
+  let nearby-infectious nearby-people with [
+    member? self infectious-at-start
+  ]
+
+  if any? nearby-people [
+    let infection-probability
+      exposure-probability nearby-people nearby-infectious
+
+    if random-float 1 < infection-probability [
+      set sir-state "I"
+      update-look
+      set new-infections-this-week new-infections-this-week + 1
+    ]
+  ]
 end
 
-to-report total-ever-infected-share
-  report (initial-infectious + total-infections) / population-size
+
+to-report exposure-probability [nearby-people nearby-infectious]
+  let infectious-pressure count nearby-infectious
+
+  ;; Masks reduce infectious pressure from masked agents.
+  if avoid_transmission? [
+    let masked-infectious count nearby-infectious with [wears_mask]
+    set infectious-pressure
+      infectious-pressure - masked-infectious +
+      (masked-infectious * mask-risk-factor)
+  ]
+
+  let local-infectious-share infectious-pressure / count nearby-people
+  let infection-hazard beta-estimate * local-infectious-share
+
+  ;; A mask also reduces the wearer's chance of infection.
+  if avoid_transmission? and wears_mask [
+    set infection-hazard infection-hazard * mask-risk-factor
+  ]
+
+  report 1 - exp (0 - infection-hazard)
 end
+
+
+to recover-if-needed
+  if random-float 1 < weekly-recovery-probability [
+    set sir-state "R"
+    update-look
+  ]
+end
+
+
+to update-look
+  if sir-state = "S" [ set color blue ]
+  if sir-state = "I" [ set color orange ]
+  if sir-state = "R" [ set color gray ]
+end
+
+
+
+
+to-report weekly-recovery-probability
+  report 1 - exp (0 - gamma-estimate)
+end
+
 
 to update-sir-plot
   set-current-plot "SIR compartments"
@@ -225,10 +175,18 @@ to update-sir-plot
   plot count turtles with [sir-state = "R"]
 end]]></code>
   <widgets>
-    <view x="368" wrappingAllowedX="true" y="10" frameRate="30.0" minPycor="-16" height="434" showTickCounter="true" patchSize="13.0" fontSize="10" wrappingAllowedY="true" width="434" tickCounterLabel="ticks" maxPycor="16" updateMode="0" maxPxcor="16" minPxcor="-16"></view>
-    <button x="75" y="85" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55">setup</button>
-    <button x="160" y="105" height="40" disableUntilTicks="false" forever="true" kind="Observer" width="55">go</button>
-    <plot x="20" autoPlotX="true" yMax="10.0" autoPlotY="true" y="195" xMin="0.0" height="250" legend="true" xMax="10.0" yMin="0.0" width="335" display="SIR compartments">
+    <view x="200" wrappingAllowedX="true" y="40" frameRate="30.0" minPycor="-16" height="554" showTickCounter="true" patchSize="16.67" fontSize="10" wrappingAllowedY="true" width="554" tickCounterLabel="ticks" maxPycor="16" updateMode="0" maxPxcor="16" minPxcor="-16"></view>
+    <switch x="10" y="155" height="40" on="true" variable="social-distance?" width="170" display="social-distance?"></switch>
+    <switch x="10" y="95" height="40" on="true" variable="avoid_transmission?" width="170" display="avoid_transmission?"></switch>
+    <button x="10" y="30" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55">setup</button>
+    <button x="120" y="30" height="40" disableUntilTicks="false" forever="true" kind="Observer" width="55">go</button>
+    <note x="5" y="220" backgroundDark="0" fontSize="12" width="115" markdown="false" height="30" textColorDark="-1" textColorLight="-16777216" backgroundLight="0">Values to Input</note>
+    <input x="5" multiline="false" y="255" height="60" variable="beta-estimate" type="number" width="175" sizeVersion="0">0.396</input>
+    <input x="5" multiline="false" y="330" height="60" variable="gamma-estimate" type="number" width="175">0.113</input>
+    <input x="5" multiline="false" y="400" height="60" variable="population-size" type="number" width="175">10000.0</input>
+    <input x="5" multiline="false" y="470" height="60" variable="initial-infectious" type="number" width="175">175.0</input>
+    <input x="5" multiline="false" y="550" height="60" variable="mask-risk-factor" type="number" width="175">0.5</input>
+    <plot x="775" autoPlotX="true" yMax="10.0" autoPlotY="true" y="125" xMin="0.0" height="335" legend="true" xMax="10.0" yMin="0.0" width="420" display="SIR compartments">
       <setup></setup>
       <update></update>
       <pen interval="1.0" mode="0" display="S" color="-16777216" legend="true">
@@ -244,8 +202,6 @@ end]]></code>
         <update>plot count turtles with [sir-state = "R"]</update>
       </pen>
     </plot>
-    <slider x="55" step="2" y="15" max="10" width="250" display="contacts-per-infectious-per-week" height="50" min="1" direction="Horizontal" default="10.0" variable="contacts-per-infectious-per-week"></slider>
-    <slider x="40" step="0.01" y="135" max="0.2" width="250" display="gamma-estimate" height="50" min="0.05" direction="Horizontal" default="0.11" variable="gamma-estimate"></slider>
   </widgets>
   <info>## WHAT IS IT?
 
@@ -1118,38 +1074,23 @@ end]]></code>
   </linkShapes>
   <previewCommands>setup repeat 75 [ go ]</previewCommands>
   <experiments>
-    <experiment name="SIR_ABM_compatibility" repetitions="50" sequentialRunOrder="true" runMetricsEveryStep="false">
+    <experiment name="flatten the curve" repetitions="100" sequentialRunOrder="true" runMetricsEveryStep="false">
       <setup>setup</setup>
       <go>go</go>
       <exitCondition>not any? turtles with [sir-state = "I"]</exitCondition>
       <metrics>
-        <metric>beta-from-abm</metric>
-        <metric>gamma-from-abm</metric>
-        <metric>r0-from-abm</metric>
-      </metrics>
-    </experiment>
-    <experiment name="experiment_contacts" repetitions="10" sequentialRunOrder="true" runMetricsEveryStep="false">
-      <setup>setup</setup>
-      <go>go</go>
-      <exitCondition>not any? turtles with [sir-state = "I"]</exitCondition>
-      <metrics>
-        <metric>peak-infectious</metric>
-        <metric>total-ever-infected-share</metric>
+        <metric>peak-infectious-count</metric>
+        <metric>peak-infectious-week</metric>
       </metrics>
       <constants>
-        <steppedValueSet variable="contacts-per-infectious-per-week" first="2" step="2" last="10"></steppedValueSet>
-      </constants>
-    </experiment>
-    <experiment name="experiment_gamma" repetitions="10" sequentialRunOrder="true" runMetricsEveryStep="false">
-      <setup>setup</setup>
-      <go>go</go>
-      <exitCondition>not any? turtles with [sir-state = "I"]</exitCondition>
-      <metrics>
-        <metric>peak-infectious</metric>
-        <metric>total-ever-infected-share</metric>
-      </metrics>
-      <constants>
-        <steppedValueSet variable="gamma-estimate" first="0.05" step="0.01" last="0.2"></steppedValueSet>
+        <enumeratedValueSet variable="avoid_transmission?">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="social-distance?">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
       </constants>
     </experiment>
   </experiments>
